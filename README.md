@@ -30,7 +30,7 @@ In this example the attacking host is on IP address 10.1.2.3 and listens on port
 [ python script ]<br />
 ```python
 import socket
-s= socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 s.bind(("0.0.0.0", 4444))
 s.listen(2)
 print "Listening... "
