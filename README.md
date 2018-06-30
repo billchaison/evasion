@@ -5,6 +5,7 @@ Acronyms used:
 * UTM - Unified Threat Management.  A class of nextgen firewalls with integrated security features.
 * IDS - Intrusion Detection System.  A device that detects malicious network traffic.
 * IPS - Intrusion Prevention System.  A device that detects and blocks malicious network traffic.
+* A/V - Anti-Virus, Anti-Malware, etc.
 
 ## ROT13 encoded reverse shell using bash TCP device
 
