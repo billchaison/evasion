@@ -1,5 +1,5 @@
 # evasion
-Techniques for evading firewalls and anti-malware detection.
+Techniques for evading firewalls and malware detection.
 
 Acronyms used:
 * UTM - Unified Threat Management.  A class of nextgen firewalls with integrated security features.
