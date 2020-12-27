@@ -162,3 +162,11 @@ Launch Responder.<br />
 
 Lure the victim to request the URL, where www.my.lab is the attacking host running Responder.<br />
 (e.g.) `http://www.my.lab/images/image.png`
+
+## >> Capturing Credentials with Fake Login Pages
+
+This example shows how to setup a lightweight web server using bash and netcat to phish a user name and password from a network administrator.  In this example a fake login page is served to a user; once the credentials are captured the user is redirected to a real device.  This technique can be modified to suit a variety of scenarios.  
+
+**Create the HTML for the fake login page**
+
+The page used in this example can be found [here](https://github.com/billchaison/evasion/blob/master/cisco.html.zip)
