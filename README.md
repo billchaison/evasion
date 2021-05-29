@@ -457,7 +457,6 @@ Write-Output "[+] Generating string to base64 map."
 $Strs = @{}
 $StrToB64 = @{}
 $AST.FindAll({$args[0].GetType().Name -like "StringConstantExpressionAst"}, $true) | foreach { if(($_.StringConstantType -ceq "DoubleQuoted" -or $_.StringConstantType -ceq "SingleQuoted") -and ($_.Extent.Text -ne '""' -and $_.Extent.Text -ne "''" -and $_.Extent.Text.Length -gt 3)) { if($Strs.ContainsKey($_.Extent.StartLineNumber)) { $null = $Strs[$_.Extent.StartLineNumber].Add($_.Extent.Text) } else { $Strs[$_.Extent.StartLineNumber] = New-Object -TypeName "System.Collections.ArrayList"; $null = $Strs[$_.Extent.StartLineNumber].Add($_.Extent.Text) }}}
-#$AST.FindAll({$args[0].GetType().Name -like "StringConstantExpressionAst"}, $true) | foreach { if(($_.StringConstantType -ceq "DoubleQuoted") -and ($_.Extent.Text -ne '""' -and $_.Extent.Text -ne "''" -and $_.Extent.Text.Length -gt 3)) { if($Strs.ContainsKey($_.Extent.StartLineNumber)) { $null = $Strs[$_.Extent.StartLineNumber].Add($_.Extent.Text) } else { $Strs[$_.Extent.StartLineNumber] = New-Object -TypeName "System.Collections.ArrayList"; $null = $Strs[$_.Extent.StartLineNumber].Add($_.Extent.Text) }}}
 $SwitchStrs = $AST.FindAll({$args[0].GetType().Name -like "SwitchStatementAst"}, $true) | foreach { $_.Clauses.Item1.Extent } | foreach { $_.StartLineNumber }
 Foreach($Key in $Strs.Keys)
 {
