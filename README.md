@@ -482,96 +482,96 @@ Foreach($line in Get-Content $InFile)
    $temp = $line
    if(!($temp -match "^[`t ]*#"))
    {
-   if($Cmds.ContainsKey($num))
-   {
-      $Arr = $Cmds[$num]
-      for($i = 0; $i -lt $Arr.Count; $i += 2)
+      if($Cmds.ContainsKey($num))
       {
-         if($FuncMap.ContainsKey($Arr[$i]))
+         $Arr = $Cmds[$num]
+         for($i = 0; $i -lt $Arr.Count; $i += 2)
          {
-            $j = ($Arr[$i + 1]).Split(":")
-            $temp = $temp.remove(($j[0] - 1), $Arr[$i].Length).insert(($j[0] - 1), $FuncMap[$Arr[$i]])
+            if($FuncMap.ContainsKey($Arr[$i]))
+            {
+               $j = ($Arr[$i + 1]).Split(":")
+               $temp = $temp.remove(($j[0] - 1), $Arr[$i].Length).insert(($j[0] - 1), $FuncMap[$Arr[$i]])
+            }
          }
       }
-   }
-   if($Vars.ContainsKey($num))
-   {
-      $Arr = $Vars[$num]
-      for($i = 0; $i -lt $Arr.Count; $i += 2)
-      {
-         if($VarMap.ContainsKey($Arr[$i]))
-         {
-            $j = ($Arr[$i + 1]).Split(":")
-            $temp = $temp.remove(($j[0] - 1), $Arr[$i].Length).insert(($j[0] - 1), $VarMap[$Arr[$i]])
-         }
-      }
-   }
-   if($Funcs.ContainsKey($num))
-   {
-      $i = 0;
-      $Arr = $Funcs[$num] | foreach { if(!($i++ % 2)) { $_ }} | sort length -desc
-      Foreach($j in $Arr)
-      {
-         $temp = $temp -replace $j, $FuncMap[$j]
-      }
-   }
-   if(ProtectedVar $num)
-   {
       if($Vars.ContainsKey($num))
       {
          $Arr = $Vars[$num]
          for($i = 0; $i -lt $Arr.Count; $i += 2)
          {
-            $k = $Arr[$i]
-            $j = ($Arr[$i + 1]).Split(":")
-            if($VarSkipMap.ContainsKey($k))
+            if($VarMap.ContainsKey($Arr[$i]))
             {
-               $temp = $temp.remove(($j[0] - 1), $k.Length).insert(($j[0] - 1), $VarSkipMap[$k])
+               $j = ($Arr[$i + 1]).Split(":")
+               $temp = $temp.remove(($j[0] - 1), $Arr[$i].Length).insert(($j[0] - 1), $VarMap[$Arr[$i]])
             }
          }
       }
-   }
-   else
-   {
-      if($Vars.ContainsKey($num))
+      if($Funcs.ContainsKey($num))
       {
-         $Arr = $Vars[$num]
+         $i = 0;
+         $Arr = $Funcs[$num] | foreach { if(!($i++ % 2)) { $_ }} | sort length -desc
+         Foreach($j in $Arr)
+         {
+            $temp = $temp -replace $j, $FuncMap[$j]
+         }
+      }
+      if(ProtectedVar $num)
+      {
+         if($Vars.ContainsKey($num))
+         {
+            $Arr = $Vars[$num]
+            for($i = 0; $i -lt $Arr.Count; $i += 2)
+            {
+               $k = $Arr[$i]
+               $j = ($Arr[$i + 1]).Split(":")
+               if($VarSkipMap.ContainsKey($k))
+               {
+                  $temp = $temp.remove(($j[0] - 1), $k.Length).insert(($j[0] - 1), $VarSkipMap[$k])
+               }
+            }
+         }
+      }
+      else
+      {
+         if($Vars.ContainsKey($num))
+         {
+            $Arr = $Vars[$num]
+            for($i = 0; $i -lt $Arr.Count; $i += 2)
+            {
+               $k = $Arr[$i]
+               $j = ($Arr[$i + 1]).Split(":")
+               if($VarSkipMap.ContainsKey($k))
+               {
+                  $temp = $temp.remove(($j[0] - 1), $k.Length).insert(($j[0] - 1), $VarSkipMap[$k])
+               }
+            }
+         }
+      }
+      if($CmdParams.ContainsKey($num))
+      {
+         $Arr = $CmdParams[$num]
          for($i = 0; $i -lt $Arr.Count; $i += 2)
          {
-            $k = $Arr[$i]
-            $j = ($Arr[$i + 1]).Split(":")
-            if($VarSkipMap.ContainsKey($k))
+            if($ParamMap.ContainsKey($Arr[$i]))
             {
-               $temp = $temp.remove(($j[0] - 1), $k.Length).insert(($j[0] - 1), $VarSkipMap[$k])
+               $k = $Arr[$i]
+               $j = ($Arr[$i + 1]).Split(":")
+               if(($FuncMap.Values | %{$temp.contains($_)}) -contains $true)
+               {
+                  $temp = $temp.remove(($j[0] - 1), $k.Length).insert(($j[0] - 1), $ParamMap[$k])
+               }
             }
          }
       }
-   }
-   if($CmdParams.ContainsKey($num))
-   {
-      $Arr = $CmdParams[$num]
-      for($i = 0; $i -lt $Arr.Count; $i += 2)
+      if($StrToB64.ContainsKey($num))
       {
-         if($ParamMap.ContainsKey($Arr[$i]))
+         $Arr = $StrToB64[$num]
+         for($i = 0; $i -lt $Arr.Count; $i += 2)
          {
-            $k = $Arr[$i]
-            $j = ($Arr[$i + 1]).Split(":")
-            if(($FuncMap.Values | %{$temp.contains($_)}) -contains $true)
-            {
-               $temp = $temp.remove(($j[0] - 1), $k.Length).insert(($j[0] - 1), $ParamMap[$k])
-            }
+            $temp = $temp -Replace $Arr[$i], $Arr[$i + 1]
          }
       }
-   }
-   if($StrToB64.ContainsKey($num))
-   {
-      $Arr = $StrToB64[$num]
-      for($i = 0; $i -lt $Arr.Count; $i += 2)
-      {
-         $temp = $temp -Replace $Arr[$i], $Arr[$i + 1]
-      }
-   }
-   $null = $PSObfuscated.Add($temp)
+      $null = $PSObfuscated.Add($temp)
    }
    $num++
 }
