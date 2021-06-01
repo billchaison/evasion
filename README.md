@@ -568,7 +568,8 @@ Foreach($line in Get-Content $InFile)
          $Arr = $StrToB64[$num]
          for($i = 0; $i -lt $Arr.Count; $i += 2)
          {
-            $temp = $temp -Replace $Arr[$i], $Arr[$i + 1]
+            #$temp = $temp -Replace $Arr[$i], $Arr[$i + 1]
+            $temp = $temp.Replace($Arr[$i], $Arr[$i + 1])
          }
       }
       $null = $PSObfuscated.Add($temp)
