@@ -592,7 +592,7 @@ catch
 
 ## >> C# Reverse Shell
 
-This exsmple modifies already-published reverse shell code written in C# to slip past IDS/IPS.  The source script was taken from:
+This example modifies already-published reverse shell code written in C# to slip past IDS/IPS.  The source script was taken from:
 
 `https://github.com/carlospolop/hacktricks/blob/master/windows/av-bypass.md#compiling-our-own-reverse-shell`
 
