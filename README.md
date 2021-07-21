@@ -868,7 +868,7 @@ ip route add 10.180.151.13/32 via 192.168.1.242
 snmpwalk -v 2c -c public 10.180.151.13 .1.3.6.1.2.1.1.9.1.4
 ```
 
-Output similar to the following whould appear.
+Output similar to the following should appear.
 
 "Linux 1"<br />
 ![alt text](https://github.com/billchaison/evasion/blob/master/udp01.png)<br />
