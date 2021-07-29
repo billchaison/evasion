@@ -938,6 +938,7 @@ done
 echo 1 > /proc/sys/net/ipv4/icmp_echo_ignore_all
 
 # receive the data and reconstitute the file
+net="eth0"
 ipv4hdr=20
 icmphdr=8
 skip=$(($ipv4hdr+$icmphdr+1))
@@ -977,7 +978,7 @@ do
          fi
       fi
    fi
-done < <(stdbuf -oL tcpdump -nn -t -A -s 0 -i eth0 icmp[icmptype] == 8 2>/dev/null | stdbuf -oL grep -v "^IP " | stdbuf -oL cut -c $skip- | stdbuf -oL sed 's/[^A-Za-z0-9/=+]//g')
+done < <(stdbuf -oL tcpdump -nn -t -A -s 0 -i $net icmp[icmptype] == 8 2>/dev/null | stdbuf -oL grep -v "^IP " | stdbuf -oL cut -c $skip- | stdbuf -oL sed 's/[^A-Za-z0-9/=+]//g')
 
 # restore ICMP echo reply
 echo 0 > /proc/sys/net/ipv4/icmp_echo_ignore_all
